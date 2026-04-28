@@ -5,20 +5,6 @@ function jsonHeaders(apiKey) {
   };
 }
 
-function normalizeUrlOrigin(rawUrl, publicBase) {
-  if (!rawUrl || !publicBase) return rawUrl;
-  try {
-    const target = new URL(rawUrl);
-    const base = new URL(publicBase);
-    target.protocol = base.protocol;
-    target.hostname = base.hostname;
-    target.port = base.port;
-    return target.toString();
-  } catch {
-    return rawUrl;
-  }
-}
-
 async function parseJsonResponse(response) {
   const text = await response.text();
   if (!text) {
@@ -39,13 +25,8 @@ export class SgcClient {
     this.oauthClientId = config.oauthClientId;
     this.oauthClientSecret = config.oauthClientSecret;
     this.redirectUri = config.redirectUri;
-    this.oauthPublicBase = config.oauthPublicBase || "";
-    const rawOauthTokenUrl =
+    this.oauthTokenUrl =
       config.oauthTokenUrl || this.baseUrl.replace(/\/v1$/, "") + "/oauth/token";
-    this.oauthTokenUrl = normalizeUrlOrigin(
-      rawOauthTokenUrl,
-      this.oauthPublicBase
-    );
     this.requestedScope = config.requestedScope;
   }
 
