@@ -31,16 +31,21 @@ function sha256Base64Url(value) {
   return crypto.createHash("sha256").update(value).digest("base64url");
 }
 
-function rewriteLoopbackUrl(rawUrl, publicBase) {
+function rewriteUrlOrigin(rawUrl, publicBase, loopbackOnly = false) {
   if (!rawUrl || !publicBase) return rawUrl;
   try {
     const target = new URL(rawUrl);
-    const isLoopback =
-      target.hostname === "127.0.0.1" ||
-      target.hostname === "localhost" ||
-      target.hostname === "::1";
-    if (!isLoopback) return rawUrl;
     const base = new URL(publicBase);
+    if (loopbackOnly) {
+      const isLoopback =
+        target.hostname === "127.0.0.1" ||
+        target.hostname === "localhost" ||
+        target.hostname === "::1";
+      if (!isLoopback) return rawUrl;
+    }
+    if (target.protocol === base.protocol && target.host === base.host) {
+      return rawUrl;
+    }
     target.protocol = base.protocol;
     target.host = base.host;
     return target.toString();
@@ -49,18 +54,17 @@ function rewriteLoopbackUrl(rawUrl, publicBase) {
   }
 }
 
-// If the SGC backend returned an authorize URL that points at its private
-// loopback address, swap the origin for a configured public one. Also rewrite
-// any query parameters that themselves contain absolute loopback URLs, such as
-// redirect_uri, so reverse-proxied HTTPS deployments do not leak :7788.
+// Normalize OAuth URLs to the configured public origin. This covers both
+// loopback URLs like http://127.0.0.1:7788/... and public-host URLs that still
+// leak the internal port, like https://sadgirlsclub.wtf:7788/....
 function rewriteOauthOrigin(rawUrl, publicBase) {
-  const rewritten = rewriteLoopbackUrl(rawUrl, publicBase);
+  const rewritten = rewriteUrlOrigin(rawUrl, publicBase);
   if (!rewritten || !publicBase) return rewritten;
 
   try {
     const target = new URL(rewritten);
     for (const [key, value] of target.searchParams.entries()) {
-      const nested = rewriteLoopbackUrl(value, publicBase);
+      const nested = rewriteUrlOrigin(value, publicBase);
       if (nested !== value) {
         target.searchParams.set(key, nested);
       }
