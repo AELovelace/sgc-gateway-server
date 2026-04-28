@@ -31,6 +31,28 @@ function sha256Base64Url(value) {
   return crypto.createHash("sha256").update(value).digest("base64url");
 }
 
+// If the SGC backend returned an authorize_url that points at its private
+// loopback address, swap the origin for a configured public one so the game
+// client can actually reach it. No-op when publicBase is empty or the URL
+// is already on a non-loopback host.
+function rewriteOauthOrigin(rawUrl, publicBase) {
+  if (!rawUrl || !publicBase) return rawUrl;
+  try {
+    const target = new URL(rawUrl);
+    const isLoopback =
+      target.hostname === "127.0.0.1" ||
+      target.hostname === "localhost" ||
+      target.hostname === "::1";
+    if (!isLoopback) return rawUrl;
+    const base = new URL(publicBase);
+    target.protocol = base.protocol;
+    target.host = base.host;
+    return target.toString();
+  } catch (_e) {
+    return rawUrl;
+  }
+}
+
 function sanitizePlayer(player) {
   if (!player) return null;
   return {
@@ -232,9 +254,14 @@ router.post("/sgc/link/start", requireSession, async (req, res) => {
       codeChallenge
     });
 
+    const authorizeUrl = rewriteOauthOrigin(
+      payload?.oauth?.authorize_url,
+      config.sgc.oauthPublicBase
+    );
+
     res.json({
       state,
-      authorize_url: payload?.oauth?.authorize_url,
+      authorize_url: authorizeUrl,
       fallback: payload?.fallback || null
     });
   } catch (error) {

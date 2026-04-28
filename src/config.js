@@ -85,6 +85,11 @@ export function getConfig() {
         "http://127.0.0.1:8787/sgc/link/callback",
       oauthTokenUrl:
         process.env.SGC_OAUTH_TOKEN_URL || "http://127.0.0.1:7788/oauth/token",
+      // If the SGC backend returns authorize URLs that point at its internal
+      // host (e.g. http://127.0.0.1:7788), set this to the public origin
+      // (e.g. https://sadgirlsclub.wtf) and the gateway will rewrite the
+      // origin before handing the URL back to clients.
+      oauthPublicBase: process.env.SGC_OAUTH_PUBLIC_BASE || "",
       requestedScope: process.env.SGC_REQUESTED_SCOPE || "balance:read"
     },
     security: {
