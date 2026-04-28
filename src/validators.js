@@ -5,7 +5,7 @@ export const REWARD_TYPES = {
 };
 
 export function buildExternalId(steamId) {
-  return `spd:steam:${steamId}`;
+  return `spd-steam-${steamId}`;
 }
 
 export function buildIdempotencyKey(event) {

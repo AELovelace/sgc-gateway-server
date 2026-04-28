@@ -72,6 +72,16 @@ function requireSession(req, res, next) {
 }
 
 async function verifySgcStartup() {
+  if (!config.sgc.oauthClientId) {
+    throw new Error(
+      "SGC_OAUTH_CLIENT_ID is required for the OAuth link flow"
+    );
+  }
+  if (!config.sgc.redirectUri) {
+    throw new Error(
+      "SGC_REDIRECT_URI is required and must match the OAuth client's registered redirect URI"
+    );
+  }
   const me = await sgc.getMe();
   const scopes = new Set(me?.app?.scopes || []);
   if (!scopes.has("coins:mint")) {
@@ -147,7 +157,9 @@ router.post("/auth/steam/finish", async (req, res) => {
     const ticketHex = String(req.body?.ticket_hex || "").trim();
     const nonce = String(req.body?.nonce || "").trim();
 
-    if (!steamId || !ticketHex || !nonce) {
+    // ticket_hex may be empty when the gateway is intentionally running in
+    // insecure dev mode; the verifier will short-circuit in that case.
+    if (!steamId || !nonce || (!ticketHex && !config.steam.allowInsecure)) {
       res.status(400).json({ error: "steam_finish_payload_invalid" });
       return;
     }

@@ -76,14 +76,15 @@ export function getConfig() {
       ticketIdentity: process.env.STEAM_TICKET_IDENTITY || "spd-sgc-gateway"
     },
     sgc: {
-      baseUrl: process.env.SGC_BASE_URL || "",
+      baseUrl: process.env.SGC_BASE_URL || "http://127.0.0.1:7788/v1",
       apiKey: process.env.SGC_API_KEY || "",
       oauthClientId: process.env.SGC_OAUTH_CLIENT_ID || "",
       oauthClientSecret: process.env.SGC_OAUTH_CLIENT_SECRET || "",
       redirectUri:
         process.env.SGC_REDIRECT_URI ||
         "http://127.0.0.1:8787/sgc/link/callback",
-      oauthTokenUrl: process.env.SGC_OAUTH_TOKEN_URL || "",
+      oauthTokenUrl:
+        process.env.SGC_OAUTH_TOKEN_URL || "http://127.0.0.1:7788/oauth/token",
       requestedScope: process.env.SGC_REQUESTED_SCOPE || "balance:read"
     },
     security: {

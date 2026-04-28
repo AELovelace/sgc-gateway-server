@@ -65,6 +65,11 @@ Network bind defaults:
 - `HOST=0.0.0.0`
 - `PORT=8787`
 
+Default upstream SGC connection:
+
+- `SGC_BASE_URL=http://127.0.0.1:7788/v1`
+- `SGC_OAUTH_TOKEN_URL=http://127.0.0.1:7788/oauth/token`
+
 ## Reverse proxy
 
 An nginx snippet is included at:
@@ -76,3 +81,5 @@ Expected production settings:
 - `PUBLIC_BASE_URL=https://sadgirlsclub.wtf/gmlapi`
 - `PUBLIC_BASE_PATH=/gmlapi`
 - `SGC_REDIRECT_URI=https://sadgirlsclub.wtf/gmlapi/sgc/link/callback`
+- `SGC_BASE_URL=http://127.0.0.1:7788/v1`
+- `SGC_OAUTH_TOKEN_URL=http://127.0.0.1:7788/oauth/token`
