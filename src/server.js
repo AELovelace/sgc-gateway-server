@@ -47,7 +47,8 @@ function rewriteUrlOrigin(rawUrl, publicBase, loopbackOnly = false) {
       return rawUrl;
     }
     target.protocol = base.protocol;
-    target.host = base.host;
+    target.hostname = base.hostname;
+    target.port = base.port;
     return target.toString();
   } catch (_e) {
     return rawUrl;
