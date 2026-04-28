@@ -92,6 +92,48 @@ function appendAudit(type, detail) {
   store.appendAudit({ type, detail, created_at: nowIso() });
 }
 
+function isSyntheticSingleplayerMatchId(matchId) {
+  return String(matchId || "").startsWith("sp_match_");
+}
+
+function ensureSyntheticSingleplayerMatch(event, session) {
+  if (!isSyntheticSingleplayerMatchId(event.match_id)) {
+    return store.getMatch(event.match_id);
+  }
+
+  let match = store.getMatch(event.match_id);
+  if (match) {
+    return match;
+  }
+
+  if (session.steam_id !== event.reporter_steam_id) {
+    return null;
+  }
+
+  match = store.createMatch({
+    match_id: event.match_id,
+    match_token: String(event.match_token || ""),
+    host_steam_id: event.reporter_steam_id,
+    server_instance_id: event.server_instance_id,
+    created_at: nowIso(),
+    expires_at: new Date(
+      Date.now() + config.security.matchTokenTtlMs
+    ).toISOString(),
+    participants: {
+      [event.reporter_steam_id]: { joined_at: nowIso(), role: "host" }
+    },
+    closed_at: null,
+    synthetic_singleplayer: true
+  });
+
+  appendAudit("singleplayer_match_created", {
+    match_id: match.match_id,
+    steam_id: event.reporter_steam_id
+  });
+
+  return match;
+}
+
 function getSessionFromRequest(req) {
   const header = req.get("authorization") || "";
   if (!header.startsWith("Bearer ")) {
@@ -428,7 +470,7 @@ router.post("/matches/report-event", requireSession, async (req, res) => {
       return;
     }
 
-    const match = store.getMatch(event.match_id);
+    const match = ensureSyntheticSingleplayerMatch(event, req.session);
     if (!match) {
       res.status(404).json({ error: "match_not_found" });
       return;
