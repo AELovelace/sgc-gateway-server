@@ -110,14 +110,21 @@ function ensureSyntheticSingleplayerMatch(event, session) {
     return null;
   }
 
+  const createdAt = Number.isFinite(Date.parse(event.occurred_at))
+    ? String(event.occurred_at)
+    : nowIso();
+  const baseMs = Number.isFinite(Date.parse(createdAt))
+    ? Date.parse(createdAt)
+    : Date.now();
+
   match = store.createMatch({
     match_id: event.match_id,
     match_token: String(event.match_token || ""),
     host_steam_id: event.reporter_steam_id,
     server_instance_id: event.server_instance_id,
-    created_at: nowIso(),
+    created_at: createdAt,
     expires_at: new Date(
-      Date.now() + config.security.matchTokenTtlMs
+      baseMs + config.security.matchTokenTtlMs
     ).toISOString(),
     participants: {
       [event.reporter_steam_id]: { joined_at: nowIso(), role: "host" }
@@ -132,6 +139,29 @@ function ensureSyntheticSingleplayerMatch(event, session) {
   });
 
   return match;
+}
+
+async function refreshLinkedPlayer(player) {
+  if (!player?.external_id) {
+    return player;
+  }
+  if (player.sgc_link_active) {
+    return player;
+  }
+
+  try {
+    await sgc.getBalance(player.external_id);
+    return store.upsertPlayer({
+      ...player,
+      sgc_link_active: true,
+      linked_at: player.linked_at || nowIso()
+    });
+  } catch (error) {
+    if (error.status === 404) {
+      return player;
+    }
+    throw error;
+  }
 }
 
 function getSessionFromRequest(req) {
@@ -265,12 +295,13 @@ router.post("/auth/steam/finish", async (req, res) => {
       allowInsecure: config.steam.allowInsecure
     });
 
-    const player = store.upsertPlayer({
+    let player = store.upsertPlayer({
       steam_id: steamId,
       external_id: buildExternalId(steamId),
       last_known_name: personaName || challenge.persona_name || steamId,
       trust_flags: verification.insecure ? ["steam_auth_insecure"] : []
     });
+    player = await refreshLinkedPlayer(player);
 
     const session = store.createSession({
       session_token: randomToken(24),
@@ -379,12 +410,13 @@ router.get("/sgc/link/status", requireSession, (req, res) => {
 
 router.get("/sgc/balance", requireSession, async (req, res) => {
   try {
-    if (!req.player?.sgc_link_active) {
+    const player = await refreshLinkedPlayer(req.player);
+    if (!player?.sgc_link_active) {
       res.status(400).json({ error: "player_not_linked" });
       return;
     }
 
-    const balance = await sgc.getBalance(req.player.external_id);
+    const balance = await sgc.getBalance(player.external_id);
     res.json(balance);
   } catch (error) {
     res.status(error.status || 500).json({
@@ -486,7 +518,9 @@ router.post("/matches/report-event", requireSession, async (req, res) => {
       return;
     }
 
-    const player = store.getPlayer(event.beneficiary_steam_id);
+    const player = await refreshLinkedPlayer(
+      store.getPlayer(event.beneficiary_steam_id)
+    );
     const rewardSummary = summarizeEvent(event);
     const existing = store.getRewardEvent(rewardSummary.idempotencyKey);
     const recentEvents = store
