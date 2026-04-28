@@ -1,0 +1,532 @@
+import crypto from "node:crypto";
+import express from "express";
+
+import { getConfig } from "./config.js";
+import { JsonStore } from "./store.js";
+import { SgcClient } from "./sgc-client.js";
+import { verifySteamTicket } from "./steam.js";
+import {
+  summarizeEvent,
+  validateRewardEvent,
+  buildExternalId
+} from "./validators.js";
+
+const config = getConfig();
+const store = new JsonStore(config.storePath);
+const sgc = new SgcClient(config.sgc);
+const app = express();
+
+app.use(express.json({ limit: "64kb" }));
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function randomToken(size = 24) {
+  return crypto.randomBytes(size).toString("hex");
+}
+
+function sha256Base64Url(value) {
+  return crypto.createHash("sha256").update(value).digest("base64url");
+}
+
+function sanitizePlayer(player) {
+  if (!player) return null;
+  return {
+    steam_id: player.steam_id,
+    external_id: player.external_id,
+    last_known_name: player.last_known_name,
+    sgc_link_active: Boolean(player.sgc_link_active),
+    linked_at: player.linked_at || null,
+    trust_flags: player.trust_flags || []
+  };
+}
+
+function appendAudit(type, detail) {
+  store.appendAudit({ type, detail, created_at: nowIso() });
+}
+
+function getSessionFromRequest(req) {
+  const header = req.get("authorization") || "";
+  if (!header.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const token = header.slice("Bearer ".length).trim();
+  const session = store.getSession(token);
+  if (!session) return null;
+  if (Date.parse(session.expires_at) <= Date.now()) return null;
+  return session;
+}
+
+function requireSession(req, res, next) {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  req.session = session;
+  req.player = store.getPlayer(session.steam_id);
+  next();
+}
+
+async function verifySgcStartup() {
+  const me = await sgc.getMe();
+  const scopes = new Set(me?.app?.scopes || []);
+  if (!scopes.has("coins:mint")) {
+    throw new Error("SGC app is missing the coins:mint scope");
+  }
+  if (!me?.app?.can_mint) {
+    throw new Error("SGC app is not mint-authorized (can_mint=false)");
+  }
+}
+
+function scheduleMintRetry(event, reason) {
+  const delayMs = Math.max(reason.retryAfterS || 5, 5) * 1000;
+  setTimeout(async () => {
+    const latest = store.getRewardEvent(event.idempotency_key);
+    if (!latest || latest.status !== "retry") return;
+
+    try {
+      const player = store.getPlayer(latest.beneficiary_steam_id);
+      const response = await sgc.mint({
+        externalId: player.external_id,
+        amount: latest.amount,
+        note: latest.note,
+        idempotencyKey: latest.idempotency_key
+      });
+      store.saveRewardEvent({
+        ...latest,
+        status: "issued",
+        sgc_response: response,
+        issued_at: nowIso()
+      });
+      appendAudit("mint_retry_succeeded", {
+        idempotency_key: latest.idempotency_key
+      });
+    } catch (error) {
+      appendAudit("mint_retry_failed", {
+        idempotency_key: latest.idempotency_key,
+        status: error.status || 0
+      });
+    }
+  }, delayMs);
+}
+
+app.get("/healthz", (_req, res) => {
+  res.json({ ok: true, ts: nowIso() });
+});
+
+app.post("/auth/steam/start", (req, res) => {
+  const steamId = String(req.body?.steam_id || "").trim();
+  const personaName = String(req.body?.persona_name || "").trim();
+  if (!steamId) {
+    res.status(400).json({ error: "steam_id_required" });
+    return;
+  }
+
+  const nonce = randomToken(16);
+  store.createAuthChallenge({
+    nonce,
+    steam_id: steamId,
+    persona_name: personaName,
+    created_at: nowIso()
+  });
+
+  res.json({
+    nonce,
+    identity: config.steam.ticketIdentity
+  });
+});
+
+app.post("/auth/steam/finish", async (req, res) => {
+  try {
+    const steamId = String(req.body?.steam_id || "").trim();
+    const personaName = String(req.body?.persona_name || "").trim();
+    const ticketHex = String(req.body?.ticket_hex || "").trim();
+    const nonce = String(req.body?.nonce || "").trim();
+
+    if (!steamId || !ticketHex || !nonce) {
+      res.status(400).json({ error: "steam_finish_payload_invalid" });
+      return;
+    }
+
+    const challenge = store.consumeAuthChallenge(nonce);
+    if (!challenge || String(challenge.steam_id) !== steamId) {
+      res.status(400).json({ error: "invalid_auth_nonce" });
+      return;
+    }
+
+    const verification = await verifySteamTicket({
+      apiKey: config.steam.apiKey,
+      appId: config.steam.appId,
+      ticketHex,
+      steamId,
+      allowInsecure: config.steam.allowInsecure
+    });
+
+    const player = store.upsertPlayer({
+      steam_id: steamId,
+      external_id: buildExternalId(steamId),
+      last_known_name: personaName || challenge.persona_name || steamId,
+      trust_flags: verification.insecure ? ["steam_auth_insecure"] : []
+    });
+
+    const session = store.createSession({
+      session_token: randomToken(24),
+      steam_id: steamId,
+      created_at: nowIso(),
+      expires_at: new Date(
+        Date.now() + config.security.sessionTtlMs
+      ).toISOString()
+    });
+
+    appendAudit("steam_auth_succeeded", {
+      steam_id: steamId,
+      insecure: verification.insecure
+    });
+
+    res.json({
+      session_token: session.session_token,
+      player: sanitizePlayer(player)
+    });
+  } catch (error) {
+    res.status(401).json({
+      error: "steam_auth_failed",
+      details: error.body || error.message
+    });
+  }
+});
+
+app.post("/sgc/link/start", requireSession, async (req, res) => {
+  try {
+    const player = req.player;
+    const state = randomToken(12);
+    const codeVerifier = randomToken(24);
+    const codeChallenge = sha256Base64Url(codeVerifier);
+
+    store.createOauthState({
+      state,
+      steam_id: player.steam_id,
+      code_verifier: codeVerifier,
+      created_at: nowIso()
+    });
+
+    const payload = await sgc.startLink({
+      externalId: player.external_id,
+      externalName: player.last_known_name,
+      state,
+      codeChallenge
+    });
+
+    res.json({
+      state,
+      authorize_url: payload?.oauth?.authorize_url,
+      fallback: payload?.fallback || null
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "sgc_link_start_failed",
+      details: error.body || error.message
+    });
+  }
+});
+
+app.get("/sgc/link/callback", async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = String(req.query.state || "");
+    const oauthState = store.consumeOauthState(state);
+    if (!code || !oauthState) {
+      res.status(400).send("Invalid or expired link state.");
+      return;
+    }
+
+    await sgc.exchangeOauthCode({
+      code,
+      codeVerifier: oauthState.code_verifier
+    });
+
+    const player = store.getPlayer(oauthState.steam_id);
+    store.upsertPlayer({
+      ...player,
+      sgc_link_active: true,
+      linked_at: nowIso()
+    });
+
+    appendAudit("sgc_link_succeeded", {
+      steam_id: oauthState.steam_id
+    });
+
+    res.status(200).send("SadGirlCoin link complete. You can return to the game now.");
+  } catch (error) {
+    res.status(error.status || 500).send(`SadGirlCoin link failed: ${error.message}`);
+  }
+});
+
+app.get("/sgc/link/status", requireSession, (req, res) => {
+  const player = store.getPlayer(req.session.steam_id);
+  res.json({
+    linked: Boolean(player?.sgc_link_active),
+    player: sanitizePlayer(player)
+  });
+});
+
+app.get("/sgc/balance", requireSession, async (req, res) => {
+  try {
+    if (!req.player?.sgc_link_active) {
+      res.status(400).json({ error: "player_not_linked" });
+      return;
+    }
+
+    const balance = await sgc.getBalance(req.player.external_id);
+    res.json(balance);
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "sgc_balance_failed",
+      details: error.body || error.message
+    });
+  }
+});
+
+app.post("/matches/create", requireSession, (req, res) => {
+  const match = store.createMatch({
+    match_id: `match_${randomToken(8)}`,
+    match_token: randomToken(18),
+    host_steam_id: req.session.steam_id,
+    server_instance_id: `srv_${randomToken(8)}`,
+    created_at: nowIso(),
+    expires_at: new Date(
+      Date.now() + config.security.matchTokenTtlMs
+    ).toISOString(),
+    participants: {
+      [req.session.steam_id]: { joined_at: nowIso(), role: "host" }
+    },
+    closed_at: null
+  });
+
+  appendAudit("match_created", {
+    match_id: match.match_id,
+    host_steam_id: match.host_steam_id
+  });
+
+  res.json({ match });
+});
+
+app.post("/matches/join", requireSession, (req, res) => {
+  const matchId = String(req.body?.match_id || "").trim();
+  const match = store.getMatch(matchId);
+  if (!match || match.closed_at) {
+    res.status(404).json({ error: "match_not_found" });
+    return;
+  }
+
+  const updated = store.updateMatch(matchId, (current) => ({
+    ...current,
+    participants: {
+      ...current.participants,
+      [req.session.steam_id]: {
+        joined_at: nowIso(),
+        role: req.session.steam_id === current.host_steam_id ? "host" : "player"
+      }
+    }
+  }));
+
+  appendAudit("match_joined", {
+    match_id: matchId,
+    steam_id: req.session.steam_id
+  });
+
+  res.json({ match: updated });
+});
+
+app.post("/matches/report-event", requireSession, async (req, res) => {
+  try {
+    const event = {
+      ...req.body,
+      reporter_steam_id: String(req.body?.reporter_steam_id || ""),
+      beneficiary_steam_id: String(req.body?.beneficiary_steam_id || ""),
+      victim_steam_id: req.body?.victim_steam_id
+        ? String(req.body.victim_steam_id)
+        : undefined,
+      enemy_spawn_id: req.body?.enemy_spawn_id
+        ? String(req.body.enemy_spawn_id)
+        : undefined,
+      match_id: String(req.body?.match_id || ""),
+      server_instance_id: String(req.body?.server_instance_id || ""),
+      level_id: req.body?.level_id ? String(req.body.level_id) : undefined,
+      run_id: req.body?.run_id ? String(req.body.run_id) : "default",
+      death_seq: req.body?.death_seq ? Number(req.body.death_seq) : undefined,
+      occurred_at: String(req.body?.occurred_at || "")
+    };
+
+    if (req.session.steam_id !== event.reporter_steam_id) {
+      res.status(403).json({ error: "reporter_session_mismatch" });
+      return;
+    }
+
+    const match = store.getMatch(event.match_id);
+    if (!match) {
+      res.status(404).json({ error: "match_not_found" });
+      return;
+    }
+
+    if (String(req.body?.match_token || "") !== String(match.match_token)) {
+      res.status(403).json({ error: "invalid_match_token" });
+      return;
+    }
+
+    if (event.server_instance_id !== match.server_instance_id) {
+      res.status(403).json({ error: "server_instance_mismatch" });
+      return;
+    }
+
+    const player = store.getPlayer(event.beneficiary_steam_id);
+    const rewardSummary = summarizeEvent(event);
+    const existing = store.getRewardEvent(rewardSummary.idempotencyKey);
+    const recentEvents = store
+      .listRewardEvents()
+      .filter((candidate) => candidate.status !== "rejected");
+
+    const validation = validateRewardEvent({
+      event,
+      match,
+      player,
+      existingEvent: existing,
+      security: config.security,
+      recentRewardEvents: recentEvents
+    });
+
+    if (!validation.ok) {
+      res.status(validation.code === "duplicate_event" ? 409 : 400).json({
+        error: validation.code
+      });
+      return;
+    }
+
+    const rewardEvent = {
+      ...event,
+      amount: rewardSummary.amount,
+      note: rewardSummary.note,
+      idempotency_key: rewardSummary.idempotencyKey,
+      status: validation.suspicious ? "held" : "pending",
+      suspicious_reasons: validation.suspicious ? validation.suspiciousReasons : [],
+      created_at: nowIso()
+    };
+
+    store.saveRewardEvent(rewardEvent);
+
+    if (validation.suspicious) {
+      appendAudit("reward_held", {
+        idempotency_key: rewardEvent.idempotency_key,
+        reasons: rewardEvent.suspicious_reasons
+      });
+      res.status(202).json({ ok: true, status: "held", reward_event: rewardEvent });
+      return;
+    }
+
+    try {
+      const mintResponse = await sgc.mint({
+        externalId: player.external_id,
+        amount: rewardEvent.amount,
+        note: rewardEvent.note,
+        idempotencyKey: rewardEvent.idempotency_key
+      });
+
+      const issued = store.saveRewardEvent({
+        ...rewardEvent,
+        status: "issued",
+        issued_at: nowIso(),
+        sgc_response: mintResponse
+      });
+
+      appendAudit("reward_issued", {
+        idempotency_key: issued.idempotency_key,
+        steam_id: issued.beneficiary_steam_id,
+        amount: issued.amount
+      });
+
+      res.json({ ok: true, status: "issued", reward_event: issued });
+    } catch (error) {
+      const retryable = error.status === 429 || error.status >= 500;
+      const failed = store.saveRewardEvent({
+        ...rewardEvent,
+        status: retryable ? "retry" : "rejected",
+        error_status: error.status || 0,
+        error_body: error.body || error.message
+      });
+
+      if (retryable) {
+        scheduleMintRetry(failed, error);
+      }
+
+      appendAudit("reward_issue_failed", {
+        idempotency_key: failed.idempotency_key,
+        retryable
+      });
+
+      res.status(retryable ? 202 : error.status || 500).json({
+        ok: retryable,
+        status: failed.status,
+        reward_event: failed
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: "reward_report_failed",
+      details: error.message
+    });
+  }
+});
+
+app.post("/matches/close", requireSession, (req, res) => {
+  const matchId = String(req.body?.match_id || "").trim();
+  const match = store.getMatch(matchId);
+  if (!match) {
+    res.status(404).json({ error: "match_not_found" });
+    return;
+  }
+
+  if (match.host_steam_id !== req.session.steam_id) {
+    res.status(403).json({ error: "only_host_can_close_match" });
+    return;
+  }
+
+  const updated = store.updateMatch(matchId, (current) => ({
+    ...current,
+    closed_at: nowIso()
+  }));
+
+  appendAudit("match_closed", { match_id: matchId });
+  res.json({ match: updated });
+});
+
+app.get("/rewards/history", requireSession, (req, res) => {
+  const events = store
+    .listRewardEvents()
+    .filter(
+      (event) =>
+        event.beneficiary_steam_id === req.session.steam_id ||
+        event.reporter_steam_id === req.session.steam_id
+    )
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+  res.json({ events });
+});
+
+async function main() {
+  if (!config.sgc.baseUrl || !config.sgc.apiKey) {
+    throw new Error("SGC_BASE_URL and SGC_API_KEY are required");
+  }
+
+  await verifySgcStartup();
+
+  app.listen(config.port, () => {
+    console.log(`SGC gateway listening on ${config.publicBaseUrl}`);
+  });
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

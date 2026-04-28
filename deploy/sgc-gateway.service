@@ -1,0 +1,17 @@
+[Unit]
+Description=SadGirlCoin Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sgc-gateway
+Group=sgc-gateway
+WorkingDirectory=/opt/sgc-gateway-server
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/sgc-gateway-server/src/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

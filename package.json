@@ -1,0 +1,14 @@
+{
+  "name": "spd-sgc-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SadGirlCoin gateway for the SinglePlayer Demo GameMaker project.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
