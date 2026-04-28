@@ -31,11 +31,7 @@ function sha256Base64Url(value) {
   return crypto.createHash("sha256").update(value).digest("base64url");
 }
 
-// If the SGC backend returned an authorize_url that points at its private
-// loopback address, swap the origin for a configured public one so the game
-// client can actually reach it. No-op when publicBase is empty or the URL
-// is already on a non-loopback host.
-function rewriteOauthOrigin(rawUrl, publicBase) {
+function rewriteLoopbackUrl(rawUrl, publicBase) {
   if (!rawUrl || !publicBase) return rawUrl;
   try {
     const target = new URL(rawUrl);
@@ -50,6 +46,28 @@ function rewriteOauthOrigin(rawUrl, publicBase) {
     return target.toString();
   } catch (_e) {
     return rawUrl;
+  }
+}
+
+// If the SGC backend returned an authorize URL that points at its private
+// loopback address, swap the origin for a configured public one. Also rewrite
+// any query parameters that themselves contain absolute loopback URLs, such as
+// redirect_uri, so reverse-proxied HTTPS deployments do not leak :7788.
+function rewriteOauthOrigin(rawUrl, publicBase) {
+  const rewritten = rewriteLoopbackUrl(rawUrl, publicBase);
+  if (!rewritten || !publicBase) return rewritten;
+
+  try {
+    const target = new URL(rewritten);
+    for (const [key, value] of target.searchParams.entries()) {
+      const nested = rewriteLoopbackUrl(value, publicBase);
+      if (nested !== value) {
+        target.searchParams.set(key, nested);
+      }
+    }
+    return target.toString();
+  } catch (_e) {
+    return rewritten;
   }
 }
 
