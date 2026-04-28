@@ -5,6 +5,20 @@ function jsonHeaders(apiKey) {
   };
 }
 
+function normalizeUrlOrigin(rawUrl, publicBase) {
+  if (!rawUrl || !publicBase) return rawUrl;
+  try {
+    const target = new URL(rawUrl);
+    const base = new URL(publicBase);
+    target.protocol = base.protocol;
+    target.hostname = base.hostname;
+    target.port = base.port;
+    return target.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 async function parseJsonResponse(response) {
   const text = await response.text();
   if (!text) {
@@ -25,8 +39,13 @@ export class SgcClient {
     this.oauthClientId = config.oauthClientId;
     this.oauthClientSecret = config.oauthClientSecret;
     this.redirectUri = config.redirectUri;
-    this.oauthTokenUrl =
+    this.oauthPublicBase = config.oauthPublicBase || "";
+    const rawOauthTokenUrl =
       config.oauthTokenUrl || this.baseUrl.replace(/\/v1$/, "") + "/oauth/token";
+    this.oauthTokenUrl = normalizeUrlOrigin(
+      rawOauthTokenUrl,
+      this.oauthPublicBase
+    );
     this.requestedScope = config.requestedScope;
   }
 
@@ -84,13 +103,22 @@ export class SgcClient {
       params.set("client_secret", this.oauthClientSecret);
     }
 
-    const response = await fetch(this.oauthTokenUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: params
-    });
+    let response;
+    try {
+      response = await fetch(this.oauthTokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: params
+      });
+    } catch (cause) {
+      const error = new Error(
+        `SGC OAuth exchange fetch failed for ${this.oauthTokenUrl}: ${cause.message}`
+      );
+      error.cause = cause;
+      throw error;
+    }
 
     const body = await parseJsonResponse(response);
     if (!response.ok) {
