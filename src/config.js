@@ -48,10 +48,25 @@ function asInt(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeBasePath(value) {
+  if (!value || value === "/") {
+    return "";
+  }
+
+  let normalized = String(value).trim();
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+  normalized = normalized.replace(/\/+$/, "");
+  return normalized === "/" ? "" : normalized;
+}
+
 export function getConfig() {
   return {
     port: asInt(process.env.PORT, 8787),
-    publicBaseUrl: process.env.PUBLIC_BASE_URL || "http://127.0.0.1:8787",
+    publicBaseUrl:
+      process.env.PUBLIC_BASE_URL || "https://sadgirlsclub.wtf/gmlapi",
+    publicBasePath: normalizeBasePath(process.env.PUBLIC_BASE_PATH || "/gmlapi"),
     storePath: process.env.STORE_PATH || "./data/store.json",
     steam: {
       appId: process.env.STEAM_APP_ID || "",

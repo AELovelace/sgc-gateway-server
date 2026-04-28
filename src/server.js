@@ -15,6 +15,7 @@ const config = getConfig();
 const store = new JsonStore(config.storePath);
 const sgc = new SgcClient(config.sgc);
 const app = express();
+const router = express.Router();
 
 app.use(express.json({ limit: "64kb" }));
 
@@ -113,11 +114,11 @@ function scheduleMintRetry(event, reason) {
   }, delayMs);
 }
 
-app.get("/healthz", (_req, res) => {
+router.get("/healthz", (_req, res) => {
   res.json({ ok: true, ts: nowIso() });
 });
 
-app.post("/auth/steam/start", (req, res) => {
+router.post("/auth/steam/start", (req, res) => {
   const steamId = String(req.body?.steam_id || "").trim();
   const personaName = String(req.body?.persona_name || "").trim();
   if (!steamId) {
@@ -139,7 +140,7 @@ app.post("/auth/steam/start", (req, res) => {
   });
 });
 
-app.post("/auth/steam/finish", async (req, res) => {
+router.post("/auth/steam/finish", async (req, res) => {
   try {
     const steamId = String(req.body?.steam_id || "").trim();
     const personaName = String(req.body?.persona_name || "").trim();
@@ -198,7 +199,7 @@ app.post("/auth/steam/finish", async (req, res) => {
   }
 });
 
-app.post("/sgc/link/start", requireSession, async (req, res) => {
+router.post("/sgc/link/start", requireSession, async (req, res) => {
   try {
     const player = req.player;
     const state = randomToken(12);
@@ -232,7 +233,7 @@ app.post("/sgc/link/start", requireSession, async (req, res) => {
   }
 });
 
-app.get("/sgc/link/callback", async (req, res) => {
+router.get("/sgc/link/callback", async (req, res) => {
   try {
     const code = String(req.query.code || "");
     const state = String(req.query.state || "");
@@ -264,7 +265,7 @@ app.get("/sgc/link/callback", async (req, res) => {
   }
 });
 
-app.get("/sgc/link/status", requireSession, (req, res) => {
+router.get("/sgc/link/status", requireSession, (req, res) => {
   const player = store.getPlayer(req.session.steam_id);
   res.json({
     linked: Boolean(player?.sgc_link_active),
@@ -272,7 +273,7 @@ app.get("/sgc/link/status", requireSession, (req, res) => {
   });
 });
 
-app.get("/sgc/balance", requireSession, async (req, res) => {
+router.get("/sgc/balance", requireSession, async (req, res) => {
   try {
     if (!req.player?.sgc_link_active) {
       res.status(400).json({ error: "player_not_linked" });
@@ -289,7 +290,7 @@ app.get("/sgc/balance", requireSession, async (req, res) => {
   }
 });
 
-app.post("/matches/create", requireSession, (req, res) => {
+router.post("/matches/create", requireSession, (req, res) => {
   const match = store.createMatch({
     match_id: `match_${randomToken(8)}`,
     match_token: randomToken(18),
@@ -313,7 +314,7 @@ app.post("/matches/create", requireSession, (req, res) => {
   res.json({ match });
 });
 
-app.post("/matches/join", requireSession, (req, res) => {
+router.post("/matches/join", requireSession, (req, res) => {
   const matchId = String(req.body?.match_id || "").trim();
   const match = store.getMatch(matchId);
   if (!match || match.closed_at) {
@@ -340,7 +341,7 @@ app.post("/matches/join", requireSession, (req, res) => {
   res.json({ match: updated });
 });
 
-app.post("/matches/report-event", requireSession, async (req, res) => {
+router.post("/matches/report-event", requireSession, async (req, res) => {
   try {
     const event = {
       ...req.body,
@@ -479,7 +480,7 @@ app.post("/matches/report-event", requireSession, async (req, res) => {
   }
 });
 
-app.post("/matches/close", requireSession, (req, res) => {
+router.post("/matches/close", requireSession, (req, res) => {
   const matchId = String(req.body?.match_id || "").trim();
   const match = store.getMatch(matchId);
   if (!match) {
@@ -501,7 +502,7 @@ app.post("/matches/close", requireSession, (req, res) => {
   res.json({ match: updated });
 });
 
-app.get("/rewards/history", requireSession, (req, res) => {
+router.get("/rewards/history", requireSession, (req, res) => {
   const events = store
     .listRewardEvents()
     .filter(
@@ -512,6 +513,20 @@ app.get("/rewards/history", requireSession, (req, res) => {
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
 
   res.json({ events });
+});
+
+if (config.publicBasePath) {
+  app.use(config.publicBasePath, router);
+} else {
+  app.use(router);
+}
+
+app.get("/healthz", (_req, res) => {
+  res.json({
+    ok: true,
+    ts: nowIso(),
+    public_base_path: config.publicBasePath || "/"
+  });
 });
 
 async function main() {

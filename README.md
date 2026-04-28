@@ -5,6 +5,10 @@ This service sits between the GameMaker client and the SadGirlCoin API.
 This directory is intended to be its own standalone git repo so you can deploy
 it independently from the GameMaker project.
 
+Production is expected to be served behind:
+
+`https://sadgirlsclub.wtf/gmlapi/`
+
 ## What it does
 
 - Verifies Steam-authenticated players
@@ -25,6 +29,10 @@ The GameMaker integration in this repo expects the default local URL:
 
 `http://127.0.0.1:8787`
 
+For production behind the reverse proxy, point the game at:
+
+`https://sadgirlsclub.wtf/gmlapi`
+
 ## Notes
 
 - If `ALLOW_INSECURE_STEAM_AUTH=false`, the gateway requires a valid
@@ -33,6 +41,8 @@ The GameMaker integration in this repo expects the default local URL:
   `coins:mint` or `can_mint=true`.
 - Persistence is JSON-file based to keep the repo light. If you outgrow this,
   replace `src/store.js` with a real database layer.
+- The Express app is path-prefix aware. Set `PUBLIC_BASE_PATH=/gmlapi` when the
+  reverse proxy forwards requests as `/gmlapi/...`.
 
 ## Fedora install
 
@@ -49,3 +59,15 @@ Useful commands:
 - `sudo systemctl status sgc-gateway`
 - `sudo journalctl -u sgc-gateway -f`
 - `sudo systemctl enable sgc-gateway`
+
+## Reverse proxy
+
+An nginx snippet is included at:
+
+`deploy/nginx-gmlapi.conf`
+
+Expected production settings:
+
+- `PUBLIC_BASE_URL=https://sadgirlsclub.wtf/gmlapi`
+- `PUBLIC_BASE_PATH=/gmlapi`
+- `SGC_REDIRECT_URI=https://sadgirlsclub.wtf/gmlapi/sgc/link/callback`
