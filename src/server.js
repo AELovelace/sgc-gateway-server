@@ -494,6 +494,10 @@ router.post("/matches/report-event", requireSession, async (req, res) => {
       level_id: req.body?.level_id ? String(req.body.level_id) : undefined,
       run_id: req.body?.run_id ? String(req.body.run_id) : "default",
       death_seq: req.body?.death_seq ? Number(req.body.death_seq) : undefined,
+      amount: req.body?.amount != null ? Number(req.body.amount) : undefined,
+      collectible_id: req.body?.collectible_id
+        ? String(req.body.collectible_id)
+        : undefined,
       occurred_at: String(req.body?.occurred_at || "")
     };
 
@@ -521,25 +525,30 @@ router.post("/matches/report-event", requireSession, async (req, res) => {
     const player = await refreshLinkedPlayer(
       store.getPlayer(event.beneficiary_steam_id)
     );
-    const rewardSummary = summarizeEvent(event);
-    const existing = store.getRewardEvent(rewardSummary.idempotencyKey);
     const recentEvents = store
       .listRewardEvents()
       .filter((candidate) => candidate.status !== "rejected");
 
-    const validation = validateRewardEvent({
+    const initialValidation = validateRewardEvent({
       event,
       match,
       player,
-      existingEvent: existing,
+      existingEvent: null,
       security: config.security,
       recentRewardEvents: recentEvents
     });
 
-    if (!validation.ok) {
-      res.status(validation.code === "duplicate_event" ? 409 : 400).json({
-        error: validation.code
+    if (!initialValidation.ok) {
+      res.status(initialValidation.code === "duplicate_event" ? 409 : 400).json({
+        error: initialValidation.code
       });
+      return;
+    }
+
+    const rewardSummary = summarizeEvent(event);
+    const existing = store.getRewardEvent(rewardSummary.idempotencyKey);
+    if (existing) {
+      res.status(409).json({ error: "duplicate_event" });
       return;
     }
 
@@ -548,14 +557,14 @@ router.post("/matches/report-event", requireSession, async (req, res) => {
       amount: rewardSummary.amount,
       note: rewardSummary.note,
       idempotency_key: rewardSummary.idempotencyKey,
-      status: validation.suspicious ? "held" : "pending",
-      suspicious_reasons: validation.suspicious ? validation.suspiciousReasons : [],
+      status: initialValidation.suspicious ? "held" : "pending",
+      suspicious_reasons: initialValidation.suspicious ? initialValidation.suspiciousReasons : [],
       created_at: nowIso()
     };
 
     store.saveRewardEvent(rewardEvent);
 
-    if (validation.suspicious) {
+    if (initialValidation.suspicious) {
       appendAudit("reward_held", {
         idempotency_key: rewardEvent.idempotency_key,
         reasons: rewardEvent.suspicious_reasons

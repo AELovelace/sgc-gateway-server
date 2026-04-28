@@ -1,11 +1,21 @@
 export const REWARD_TYPES = {
   pve_kill: { amount: 1, note: "pve kill reward" },
   level_complete: { amount: 10, note: "level complete reward" },
-  pvp_kill: { amount: 5, note: "pvp kill reward" }
+  pvp_kill: { amount: 5, note: "pvp kill reward" },
+  collectible_pickup: { note: "collectible pickup reward" }
 };
+
+export const COLLECTIBLE_AMOUNTS = new Set([1, 3, 5, 10]);
 
 export function buildExternalId(steamId) {
   return `spd-steam-${steamId}`;
+}
+
+function rewardAmountForEvent(event) {
+  if (event.event_type === "collectible_pickup") {
+    return Number(event.amount);
+  }
+  return REWARD_TYPES[event.event_type]?.amount ?? 0;
 }
 
 export function buildIdempotencyKey(event) {
@@ -16,6 +26,8 @@ export function buildIdempotencyKey(event) {
       return `level-complete:${event.server_instance_id}:${event.run_id}:${event.level_id}:${event.beneficiary_steam_id}`;
     case "pvp_kill":
       return `pvp-kill:${event.server_instance_id}:${event.match_id}:${event.victim_steam_id}:${event.beneficiary_steam_id}:${event.death_seq}`;
+    case "collectible_pickup":
+      return `collectible-pickup:${event.server_instance_id}:${event.match_id}:${event.collectible_id}:${event.beneficiary_steam_id}`;
     default:
       return "";
   }
@@ -23,9 +35,20 @@ export function buildIdempotencyKey(event) {
 
 export function summarizeEvent(event) {
   const reward = REWARD_TYPES[event.event_type];
+  if (!reward) {
+    return {
+      amount: 0,
+      note: "",
+      idempotencyKey: buildIdempotencyKey(event)
+    };
+  }
+  const amount = rewardAmountForEvent(event);
   return {
-    amount: reward.amount,
-    note: reward.note,
+    amount,
+    note:
+      event.event_type === "collectible_pickup"
+        ? `collectible pickup reward (+${amount} SGC)`
+        : reward.note,
     idempotencyKey: buildIdempotencyKey(event)
   };
 }
@@ -83,6 +106,16 @@ export function validateRewardEvent({
       String(event.victim_steam_id) === String(event.beneficiary_steam_id)
     ) {
       return { ok: false, code: "invalid_pvp_victim" };
+    }
+  }
+
+  if (event.event_type === "collectible_pickup") {
+    if (!event.collectible_id) {
+      return { ok: false, code: "collectible_id_required" };
+    }
+
+    if (!COLLECTIBLE_AMOUNTS.has(Number(event.amount))) {
+      return { ok: false, code: "invalid_collectible_amount" };
     }
   }
 

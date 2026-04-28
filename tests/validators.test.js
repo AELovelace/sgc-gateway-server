@@ -8,7 +8,7 @@ import {
 } from "../src/validators.js";
 
 test("buildExternalId namespaces steam IDs", () => {
-  assert.equal(buildExternalId("76561198000000000"), "spd:steam:76561198000000000");
+  assert.equal(buildExternalId("76561198000000000"), "spd-steam-76561198000000000");
 });
 
 test("buildIdempotencyKey derives the expected pvp key", () => {
@@ -104,4 +104,52 @@ test("validateRewardEvent flags suspicious pve rate spikes", () => {
   assert.equal(result.ok, true);
   assert.equal(result.suspicious, true);
   assert.deepEqual(result.suspiciousReasons, ["pve_rate_limit_exceeded"]);
+});
+
+test("buildIdempotencyKey derives the expected collectible key", () => {
+  assert.equal(
+    buildIdempotencyKey({
+      event_type: "collectible_pickup",
+      server_instance_id: "srv_1",
+      match_id: "match_1",
+      collectible_id: "sp1:128:240",
+      beneficiary_steam_id: "collector"
+    }),
+    "collectible-pickup:srv_1:match_1:sp1:128:240:collector"
+  );
+});
+
+test("validateRewardEvent rejects collectible amounts outside the whitelist", () => {
+  const result = validateRewardEvent({
+    event: {
+      event_type: "collectible_pickup",
+      match_id: "match_1",
+      server_instance_id: "srv_1",
+      reporter_steam_id: "host",
+      beneficiary_steam_id: "collector",
+      collectible_id: "sp1:128:240",
+      amount: 7,
+      occurred_at: "2026-04-28T08:00:30.000Z"
+    },
+    match: {
+      match_id: "match_1",
+      host_steam_id: "host",
+      created_at: "2026-04-28T08:00:00.000Z",
+      participants: { collector: {}, host: {} }
+    },
+    player: {
+      steam_id: "collector",
+      sgc_link_active: true
+    },
+    existingEvent: null,
+    security: {
+      minLevelCompleteMs: 20000,
+      maxPveKillsPerMinute: 120,
+      maxPvpKillsPerMatch: 100
+    },
+    recentRewardEvents: []
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "invalid_collectible_amount");
 });
