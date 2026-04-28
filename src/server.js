@@ -289,7 +289,7 @@ router.post("/auth/steam/finish", async (req, res) => {
 
     const verification = await verifySteamTicket({
       apiKey: config.steam.apiKey,
-      appId: config.steam.appId,
+      appIds: config.steam.appIds,
       ticketHex,
       steamId,
       allowInsecure: config.steam.allowInsecure

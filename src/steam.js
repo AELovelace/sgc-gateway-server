@@ -1,11 +1,11 @@
 export async function verifySteamTicket({
   apiKey,
-  appId,
+  appIds,
   ticketHex,
   steamId,
   allowInsecure
 }) {
-  if (allowInsecure && (!apiKey || !appId)) {
+  if (allowInsecure && (!apiKey || !appIds?.length)) {
     return {
       ok: true,
       steamId: String(steamId),
@@ -13,42 +13,50 @@ export async function verifySteamTicket({
     };
   }
 
-  if (!apiKey || !appId) {
+  if (!apiKey || !appIds?.length) {
     throw new Error(
       "Steam ticket verification requires STEAM_WEB_API_KEY and STEAM_APP_ID"
     );
   }
 
-  const params = new URLSearchParams({
-    key: apiKey,
-    appid: String(appId),
-    ticket: ticketHex
-  });
+  let lastBody = null;
 
-  const response = await fetch(
-    `https://api.steampowered.com/ISteamUserAuth/AuthenticateUserTicket/v1/?${params.toString()}`,
-    { method: "GET" }
-  );
+  for (const appId of appIds) {
+    const params = new URLSearchParams({
+      key: apiKey,
+      appid: String(appId),
+      ticket: ticketHex
+    });
 
-  const body = await response.json();
-  const owner = body?.response?.params?.steamid;
-  const result = body?.response?.params?.result;
+    const response = await fetch(
+      `https://api.steampowered.com/ISteamUserAuth/AuthenticateUserTicket/v1/?${params.toString()}`,
+      { method: "GET" }
+    );
 
-  if (!response.ok || result !== "OK" || !owner) {
-    const error = new Error("Steam ticket verification failed");
-    error.body = body;
-    throw error;
+    const body = await response.json();
+    lastBody = body;
+    const owner = body?.response?.params?.steamid;
+    const result = body?.response?.params?.result;
+
+    if (!response.ok || result !== "OK" || !owner) {
+      continue;
+    }
+
+    if (String(owner) !== String(steamId)) {
+      const error = new Error("Steam ticket did not match the claimed steam_id");
+      error.body = body;
+      throw error;
+    }
+
+    return {
+      ok: true,
+      steamId: String(owner),
+      insecure: false,
+      appId: String(appId)
+    };
   }
 
-  if (String(owner) !== String(steamId)) {
-    const error = new Error("Steam ticket did not match the claimed steam_id");
-    error.body = body;
-    throw error;
-  }
-
-  return {
-    ok: true,
-    steamId: String(owner),
-    insecure: false
-  };
+  const error = new Error("Steam ticket verification failed");
+  error.body = lastBody;
+  throw error;
 }

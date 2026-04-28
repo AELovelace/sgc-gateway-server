@@ -37,6 +37,8 @@ For production behind the reverse proxy, point the game at:
 
 - If `ALLOW_INSECURE_STEAM_AUTH=false`, the gateway requires a valid
   `STEAM_WEB_API_KEY` and verifies Web API tickets with Steam.
+- `STEAM_APP_ID` may be a comma-separated list if you want to accept tickets
+  from multiple Steam app IDs, for example `480,1234560`.
 - The gateway fails fast on startup if the configured SGC app is missing
   `coins:mint` or `can_mint=true`.
 - Persistence is JSON-file based to keep the repo light. If you outgrow this,

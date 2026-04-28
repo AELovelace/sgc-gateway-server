@@ -61,6 +61,16 @@ function normalizeBasePath(value) {
   return normalized === "/" ? "" : normalized;
 }
 
+function asStringList(value) {
+  if (value == null || String(value).trim() === "") {
+    return [];
+  }
+  return String(value)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 export function getConfig() {
   return {
     host: process.env.HOST || "0.0.0.0",
@@ -70,7 +80,7 @@ export function getConfig() {
     publicBasePath: normalizeBasePath(process.env.PUBLIC_BASE_PATH || "/gmlapi"),
     storePath: process.env.STORE_PATH || "./data/store.json",
     steam: {
-      appId: process.env.STEAM_APP_ID || "",
+      appIds: asStringList(process.env.STEAM_APP_ID),
       apiKey: process.env.STEAM_WEB_API_KEY || "",
       allowInsecure: asBool(process.env.ALLOW_INSECURE_STEAM_AUTH, false),
       ticketIdentity: process.env.STEAM_TICKET_IDENTITY || "spd-sgc-gateway"
