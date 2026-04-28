@@ -536,8 +536,10 @@ async function main() {
 
   await verifySgcStartup();
 
-  app.listen(config.port, () => {
-    console.log(`SGC gateway listening on ${config.publicBaseUrl}`);
+  app.listen(config.port, config.host, () => {
+    console.log(
+      `SGC gateway listening on ${config.host}:${config.port} as ${config.publicBaseUrl}`
+    );
   });
 }
 

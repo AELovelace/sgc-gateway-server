@@ -60,6 +60,11 @@ Useful commands:
 - `sudo journalctl -u sgc-gateway -f`
 - `sudo systemctl enable sgc-gateway`
 
+Network bind defaults:
+
+- `HOST=0.0.0.0`
+- `PORT=8787`
+
 ## Reverse proxy
 
 An nginx snippet is included at:

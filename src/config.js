@@ -63,6 +63,7 @@ function normalizeBasePath(value) {
 
 export function getConfig() {
   return {
+    host: process.env.HOST || "0.0.0.0",
     port: asInt(process.env.PORT, 8787),
     publicBaseUrl:
       process.env.PUBLIC_BASE_URL || "https://sadgirlsclub.wtf/gmlapi",
