@@ -53,6 +53,16 @@ export function summarizeEvent(event) {
   };
 }
 
+export function countVerifiedPvpKills(rewardEvents, steamId) {
+  return rewardEvents.filter(
+    (event) =>
+      event?.event_type === "pvp_kill" &&
+      String(event?.beneficiary_steam_id || "") === String(steamId) &&
+      event?.status !== "rejected" &&
+      event?.status !== "held"
+  ).length;
+}
+
 export function validateRewardEvent({
   event,
   match,

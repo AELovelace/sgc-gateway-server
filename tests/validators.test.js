@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildExternalId,
   buildIdempotencyKey,
+  countVerifiedPvpKills,
   validateRewardEvent
 } from "../src/validators.js";
 
@@ -152,4 +153,34 @@ test("validateRewardEvent rejects collectible amounts outside the whitelist", ()
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "invalid_collectible_amount");
+});
+
+test("countVerifiedPvpKills includes retryable verified events only", () => {
+  const total = countVerifiedPvpKills(
+    [
+      {
+        event_type: "pvp_kill",
+        beneficiary_steam_id: "killer",
+        status: "issued"
+      },
+      {
+        event_type: "pvp_kill",
+        beneficiary_steam_id: "killer",
+        status: "retry"
+      },
+      {
+        event_type: "pvp_kill",
+        beneficiary_steam_id: "killer",
+        status: "held"
+      },
+      {
+        event_type: "pvp_kill",
+        beneficiary_steam_id: "other",
+        status: "issued"
+      }
+    ],
+    "killer"
+  );
+
+  assert.equal(total, 2);
 });

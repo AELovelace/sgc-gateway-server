@@ -8,7 +8,8 @@ import { verifySteamTicket } from "./steam.js";
 import {
   summarizeEvent,
   validateRewardEvent,
-  buildExternalId
+  buildExternalId,
+  countVerifiedPvpKills
 } from "./validators.js";
 
 const config = getConfig();
@@ -626,6 +627,18 @@ router.get("/sgc/balance", requireSession, async (req, res) => {
       details: error.body || error.message
     });
   }
+});
+
+router.get("/leaderboards/summary", requireSession, (req, res) => {
+  const verifiedMpKills = countVerifiedPvpKills(
+    store.listRewardEvents(),
+    req.session.steam_id
+  );
+
+  res.json({
+    steam_id: req.session.steam_id,
+    verified_mp_kills_total: verifiedMpKills
+  });
 });
 
 router.post("/matches/create", requireSession, (req, res) => {
