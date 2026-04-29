@@ -215,23 +215,27 @@ function scheduleMintRetry(event, reason) {
     const latest = store.getRewardEvent(event.idempotency_key);
     if (!latest || latest.status !== "retry") return;
 
-    try {
-      const player = store.getPlayer(latest.beneficiary_steam_id);
-      const response = await sgc.mint({
+      try {
+        const player = store.getPlayer(latest.beneficiary_steam_id);
+        const response = await sgc.mint({
         externalId: player.external_id,
         amount: latest.amount,
         note: latest.note,
         idempotencyKey: latest.idempotency_key
       });
-      store.saveRewardEvent({
-        ...latest,
-        status: "issued",
-        sgc_response: response,
-        issued_at: nowIso()
-      });
-      appendAudit("mint_retry_succeeded", {
-        idempotency_key: latest.idempotency_key
-      });
+        store.saveRewardEvent({
+          ...latest,
+          status: "issued",
+          sgc_response: response,
+          issued_at: nowIso()
+        });
+        await issueMatchedCompanyPayout({
+          rewardEvent: store.getRewardEvent(latest.idempotency_key),
+          player
+        });
+        appendAudit("mint_retry_succeeded", {
+          idempotency_key: latest.idempotency_key
+        });
     } catch (error) {
       appendAudit("mint_retry_failed", {
         idempotency_key: latest.idempotency_key,
@@ -239,6 +243,104 @@ function scheduleMintRetry(event, reason) {
       });
     }
   }, delayMs);
+}
+
+function eventQualifiesForBbiMatch(event) {
+  return event?.event_type === "pve_kill" || event?.event_type === "pvp_kill";
+}
+
+function scheduleCompanyPayoutRetry(event, reason) {
+  const delayMs = Math.max(reason.retryAfterS || 5, 5) * 1000;
+  setTimeout(async () => {
+    const latest = store.getCompanyPayoutEvent(event.idempotency_key);
+    if (!latest || latest.status !== "retry") return;
+
+    try {
+      const rewardEvent = store.getRewardEvent(latest.reward_event_idempotency_key);
+      const player = store.getPlayer(latest.steam_id);
+      const response = await sgc.companyPayout({
+        stock: latest.stock,
+        amount: latest.amount,
+        note: latest.note,
+        idempotencyKey: latest.idempotency_key
+      });
+      store.saveCompanyPayoutEvent({
+        ...latest,
+        status: "issued",
+        issued_at: nowIso(),
+        response
+      });
+      appendAudit("company_payout_retry_succeeded", {
+        idempotency_key: latest.idempotency_key
+      });
+    } catch (error) {
+      appendAudit("company_payout_retry_failed", {
+        idempotency_key: latest.idempotency_key,
+        status: error.status || 0
+      });
+    }
+  }, delayMs);
+}
+
+async function issueMatchedCompanyPayout({ rewardEvent, player }) {
+  if (!config.sgc.bridgeToken) {
+    return { disabled: true };
+  }
+  if (!eventQualifiesForBbiMatch(rewardEvent)) {
+    return { skipped: true };
+  }
+
+  const bridgeKey = `${rewardEvent.idempotency_key}:company:${config.sgc.matchedCompanyStock}`;
+  const existing = store.getCompanyPayoutEvent(bridgeKey);
+  if (existing && (existing.status === "issued" || existing.status === "pending" || existing.status === "retry")) {
+    return existing;
+  }
+
+  const note = `matched ${rewardEvent.event_type} payout for ${rewardEvent.beneficiary_steam_id}`;
+  const bridgeEvent = store.saveCompanyPayoutEvent({
+    idempotency_key: bridgeKey,
+    reward_event_idempotency_key: rewardEvent.idempotency_key,
+    steam_id: rewardEvent.beneficiary_steam_id,
+    stock: config.sgc.matchedCompanyStock,
+    event_type: rewardEvent.event_type,
+    amount: rewardEvent.amount,
+    note,
+    status: "pending",
+    created_at: nowIso()
+  });
+
+  try {
+    const response = await sgc.companyPayout({
+      stock: bridgeEvent.stock,
+      amount: bridgeEvent.amount,
+      note: bridgeEvent.note,
+      idempotencyKey: bridgeEvent.idempotency_key
+    });
+    return store.saveCompanyPayoutEvent({
+      ...bridgeEvent,
+      status: "issued",
+      issued_at: nowIso(),
+      response
+    });
+  } catch (error) {
+    const retryable = error.status === 429 || error.status >= 500;
+    const failed = store.saveCompanyPayoutEvent({
+      ...bridgeEvent,
+      status: retryable ? "retry" : "rejected",
+      error_status: error.status || 0,
+      error_body: error.body || error.message
+    });
+
+    if (retryable) {
+      scheduleCompanyPayoutRetry(failed, error);
+    }
+
+    appendAudit("company_payout_failed", {
+      idempotency_key: failed.idempotency_key,
+      retryable
+    });
+    return failed;
+  }
 }
 
 router.get("/healthz", (_req, res) => {
@@ -588,13 +690,23 @@ router.post("/matches/report-event", requireSession, async (req, res) => {
         sgc_response: mintResponse
       });
 
+      const bridgeResult = await issueMatchedCompanyPayout({
+        rewardEvent: issued,
+        player
+      });
+
       appendAudit("reward_issued", {
         idempotency_key: issued.idempotency_key,
         steam_id: issued.beneficiary_steam_id,
         amount: issued.amount
       });
 
-      res.json({ ok: true, status: "issued", reward_event: issued });
+      res.json({
+        ok: true,
+        status: "issued",
+        reward_event: issued,
+        company_payout_event: bridgeResult
+      });
     } catch (error) {
       const retryable = error.status === 429 || error.status >= 500;
       const failed = store.saveRewardEvent({

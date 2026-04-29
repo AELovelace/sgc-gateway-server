@@ -22,6 +22,7 @@ export class SgcClient {
   constructor(config) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.apiKey = config.apiKey;
+    this.bridgeToken = config.bridgeToken || "";
     this.oauthClientId = config.oauthClientId;
     this.oauthClientSecret = config.oauthClientSecret;
     this.redirectUri = config.redirectUri;
@@ -128,5 +129,31 @@ export class SgcClient {
         idempotency_key: idempotencyKey
       })
     });
+  }
+
+  async companyPayout({ stock, amount, note, idempotencyKey }) {
+    const response = await fetch(`${this.baseUrl}/bridge/company/payout`, {
+      method: "POST",
+      headers: {
+        ...jsonHeaders(this.bridgeToken),
+      },
+      body: JSON.stringify({
+        stock,
+        amount,
+        note,
+        idempotency_key: idempotencyKey
+      })
+    });
+
+    const body = await parseJsonResponse(response);
+    if (!response.ok) {
+      const error = new Error(`SGC bridge payout failed: ${response.status}`);
+      error.status = response.status;
+      error.body = body;
+      error.retryAfterS = Number(response.headers.get("Retry-After-S") || 0);
+      throw error;
+    }
+
+    return body;
   }
 }

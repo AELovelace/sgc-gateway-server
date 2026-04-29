@@ -17,6 +17,7 @@ Production is expected to be served behind:
 - Validates reward events conservatively
 - Calls `POST /v1/mint` with deterministic idempotency keys
 - Retries transient SGC failures without double-paying
+- Optionally mirrors issued kill rewards into `POST /v1/bridge/company/payout`
 
 ## Quick start
 
@@ -43,6 +44,10 @@ For production behind the reverse proxy, point the game at:
   `coins:mint` or `can_mint=true`.
 - Persistence is JSON-file based to keep the repo light. If you outgrow this,
   replace `src/store.js` with a real database layer.
+- If `SGC_BRIDGE_TOKEN` is configured, the gateway will post matched company
+  payouts for `pve_kill` and `pvp_kill` after the primary SGC reward is issued.
+  The default ticker is `BBI`, configurable via `SGC_MATCHED_COMPANY_STOCK`.
+  It does not mirror collectibles or level-complete rewards.
 - The Express app is path-prefix aware. Set `PUBLIC_BASE_PATH=/gmlapi` when the
   reverse proxy forwards requests as `/gmlapi/...`.
 

@@ -14,6 +14,7 @@ function defaultState() {
     oauthStates: {},
     matches: {},
     rewardEvents: {},
+    companyPayoutEvents: {},
     auditLogs: []
   };
 }
@@ -133,6 +134,16 @@ export class JsonStore {
 
   listRewardEvents() {
     return Object.values(this.state.rewardEvents);
+  }
+
+  getCompanyPayoutEvent(idempotencyKey) {
+    return this.state.companyPayoutEvents[idempotencyKey] || null;
+  }
+
+  saveCompanyPayoutEvent(event) {
+    this.state.companyPayoutEvents[event.idempotency_key] = event;
+    this.save();
+    return event;
   }
 
   appendAudit(entry) {

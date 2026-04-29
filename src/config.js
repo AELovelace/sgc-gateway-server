@@ -88,6 +88,7 @@ export function getConfig() {
     sgc: {
       baseUrl: process.env.SGC_BASE_URL || "http://127.0.0.1:7788/v1",
       apiKey: process.env.SGC_API_KEY || "",
+      bridgeToken: process.env.SGC_BRIDGE_TOKEN || "",
       oauthClientId: process.env.SGC_OAUTH_CLIENT_ID || "",
       oauthClientSecret: process.env.SGC_OAUTH_CLIENT_SECRET || "",
       redirectUri:
@@ -100,7 +101,8 @@ export function getConfig() {
       // (e.g. https://sadgirlsclub.wtf) and the gateway will rewrite the
       // origin before handing the URL back to clients.
       oauthPublicBase: process.env.SGC_OAUTH_PUBLIC_BASE || "",
-      requestedScope: process.env.SGC_REQUESTED_SCOPE || "balance:read"
+      requestedScope: process.env.SGC_REQUESTED_SCOPE || "balance:read",
+      matchedCompanyStock: process.env.SGC_MATCHED_COMPANY_STOCK || "BBI"
     },
     security: {
       matchTokenTtlMs: asInt(process.env.MATCH_TOKEN_TTL_MS, 6 * 60 * 60 * 1000),
