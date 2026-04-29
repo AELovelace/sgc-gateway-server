@@ -23,6 +23,12 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function gatewayLog(scope, detail = {}) {
+  console.log(
+    `[${nowIso()}] [${scope}] ${JSON.stringify(detail)}`
+  );
+}
+
 function randomToken(size = 24) {
   return crypto.randomBytes(size).toString("hex");
 }
@@ -251,13 +257,28 @@ function eventQualifiesForBbiMatch(event) {
 
 function scheduleCompanyPayoutRetry(event, reason) {
   const delayMs = Math.max(reason.retryAfterS || 5, 5) * 1000;
+  gatewayLog("company_payout_retry_scheduled", {
+    idempotency_key: event.idempotency_key,
+    delay_ms: delayMs,
+    status: reason.status || 0
+  });
   setTimeout(async () => {
     const latest = store.getCompanyPayoutEvent(event.idempotency_key);
     if (!latest || latest.status !== "retry") return;
 
     try {
       const rewardEvent = store.getRewardEvent(latest.reward_event_idempotency_key);
-      const player = store.getPlayer(latest.steam_id);
+      if (!rewardEvent) {
+        gatewayLog("company_payout_retry_missing_reward_event", {
+          idempotency_key: latest.idempotency_key,
+          reward_event_idempotency_key: latest.reward_event_idempotency_key
+        });
+        appendAudit("company_payout_retry_missing_reward_event", {
+          idempotency_key: latest.idempotency_key,
+          reward_event_idempotency_key: latest.reward_event_idempotency_key
+        });
+        return;
+      }
       const response = await sgc.companyPayout({
         stock: latest.stock,
         amount: latest.amount,
@@ -270,13 +291,26 @@ function scheduleCompanyPayoutRetry(event, reason) {
         issued_at: nowIso(),
         response
       });
+      gatewayLog("company_payout_retry_succeeded", {
+        idempotency_key: latest.idempotency_key,
+        stock: latest.stock,
+        amount: latest.amount
+      });
       appendAudit("company_payout_retry_succeeded", {
-        idempotency_key: latest.idempotency_key
+        idempotency_key: latest.idempotency_key,
+        stock: latest.stock,
+        amount: latest.amount
       });
     } catch (error) {
+      gatewayLog("company_payout_retry_failed", {
+        idempotency_key: latest.idempotency_key,
+        status: error.status || 0,
+        body: error.body || error.message
+      });
       appendAudit("company_payout_retry_failed", {
         idempotency_key: latest.idempotency_key,
-        status: error.status || 0
+        status: error.status || 0,
+        error_body: error.body || error.message
       });
     }
   }, delayMs);
@@ -284,19 +318,60 @@ function scheduleCompanyPayoutRetry(event, reason) {
 
 async function issueMatchedCompanyPayout({ rewardEvent, player }) {
   if (!config.sgc.bridgeToken) {
+    gatewayLog("company_payout_disabled", {
+      reason: "missing_bridge_token",
+      reward_event: rewardEvent?.idempotency_key || null
+    });
+    appendAudit("company_payout_disabled", {
+      reason: "missing_bridge_token",
+      reward_event_idempotency_key: rewardEvent?.idempotency_key || null
+    });
     return { disabled: true };
   }
   if (!eventQualifiesForBbiMatch(rewardEvent)) {
+    gatewayLog("company_payout_skipped", {
+      reason: "event_type_not_eligible",
+      event_type: rewardEvent?.event_type || null,
+      reward_event: rewardEvent?.idempotency_key || null
+    });
+    appendAudit("company_payout_skipped", {
+      reason: "event_type_not_eligible",
+      event_type: rewardEvent?.event_type || null,
+      reward_event_idempotency_key: rewardEvent?.idempotency_key || null
+    });
     return { skipped: true };
   }
 
   const bridgeKey = `${rewardEvent.idempotency_key}:company:${config.sgc.matchedCompanyStock}`;
   const existing = store.getCompanyPayoutEvent(bridgeKey);
   if (existing && (existing.status === "issued" || existing.status === "pending" || existing.status === "retry")) {
+    gatewayLog("company_payout_existing", {
+      idempotency_key: bridgeKey,
+      status: existing.status
+    });
+    appendAudit("company_payout_existing", {
+      idempotency_key: bridgeKey,
+      status: existing.status
+    });
     return existing;
   }
 
   const note = `matched ${rewardEvent.event_type} payout for ${rewardEvent.beneficiary_steam_id}`;
+  gatewayLog("company_payout_requesting", {
+    idempotency_key: bridgeKey,
+    stock: config.sgc.matchedCompanyStock,
+    amount: rewardEvent.amount,
+    event_type: rewardEvent.event_type,
+    beneficiary_steam_id: rewardEvent.beneficiary_steam_id,
+    player_external_id: player?.external_id || null
+  });
+  appendAudit("company_payout_requesting", {
+    idempotency_key: bridgeKey,
+    stock: config.sgc.matchedCompanyStock,
+    amount: rewardEvent.amount,
+    event_type: rewardEvent.event_type,
+    beneficiary_steam_id: rewardEvent.beneficiary_steam_id
+  });
   const bridgeEvent = store.saveCompanyPayoutEvent({
     idempotency_key: bridgeKey,
     reward_event_idempotency_key: rewardEvent.idempotency_key,
@@ -316,12 +391,25 @@ async function issueMatchedCompanyPayout({ rewardEvent, player }) {
       note: bridgeEvent.note,
       idempotencyKey: bridgeEvent.idempotency_key
     });
-    return store.saveCompanyPayoutEvent({
+    const issued = store.saveCompanyPayoutEvent({
       ...bridgeEvent,
       status: "issued",
       issued_at: nowIso(),
       response
     });
+    gatewayLog("company_payout_succeeded", {
+      idempotency_key: issued.idempotency_key,
+      stock: issued.stock,
+      amount: issued.amount,
+      response
+    });
+    appendAudit("company_payout_succeeded", {
+      idempotency_key: issued.idempotency_key,
+      stock: issued.stock,
+      amount: issued.amount,
+      response
+    });
+    return issued;
   } catch (error) {
     const retryable = error.status === 429 || error.status >= 500;
     const failed = store.saveCompanyPayoutEvent({
@@ -335,9 +423,21 @@ async function issueMatchedCompanyPayout({ rewardEvent, player }) {
       scheduleCompanyPayoutRetry(failed, error);
     }
 
+    gatewayLog("company_payout_failed", {
+      idempotency_key: failed.idempotency_key,
+      stock: failed.stock,
+      amount: failed.amount,
+      retryable,
+      status: error.status || 0,
+      body: error.body || error.message
+    });
     appendAudit("company_payout_failed", {
       idempotency_key: failed.idempotency_key,
-      retryable
+      retryable,
+      status: error.status || 0,
+      error_body: error.body || error.message,
+      stock: failed.stock,
+      amount: failed.amount
     });
     return failed;
   }
