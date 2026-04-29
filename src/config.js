@@ -101,7 +101,8 @@ export function getConfig() {
       // (e.g. https://sadgirlsclub.wtf) and the gateway will rewrite the
       // origin before handing the URL back to clients.
       oauthPublicBase: process.env.SGC_OAUTH_PUBLIC_BASE || "",
-      requestedScope: process.env.SGC_REQUESTED_SCOPE || "balance:read",
+      requestedScope:
+        process.env.SGC_REQUESTED_SCOPE || "balance:read coins:debit",
       matchedCompanyStock: process.env.SGC_MATCHED_COMPANY_STOCK || "BBI"
     },
     security: {

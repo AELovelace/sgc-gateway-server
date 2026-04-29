@@ -629,6 +629,50 @@ router.get("/sgc/balance", requireSession, async (req, res) => {
   }
 });
 
+router.post("/sgc/charge", requireSession, async (req, res) => {
+  try {
+    const player = await refreshLinkedPlayer(req.player);
+    if (!player?.sgc_link_active) {
+      res.status(400).json({ error: "player_not_linked" });
+      return;
+    }
+
+    const amount = Number.parseInt(String(req.body?.amount ?? ""), 10);
+    const itemId = String(req.body?.item_id || "").trim();
+    const note = String(req.body?.note || "").trim();
+    const idempotencyKeyRaw = String(req.body?.idempotency_key || "").trim();
+
+    if (!Number.isFinite(amount) || amount < 1) {
+      res.status(400).json({ error: "invalid_amount" });
+      return;
+    }
+
+    const chargeNote = note || (itemId ? `unlock ${itemId}` : "game purchase");
+    const charge = await sgc.charge({
+      externalId: player.external_id,
+      amount,
+      note: chargeNote,
+      idempotencyKey: idempotencyKeyRaw || undefined
+    });
+
+    appendAudit("sgc_charge_succeeded", {
+      steam_id: req.session.steam_id,
+      external_id: player.external_id,
+      item_id: itemId || null,
+      amount,
+      note: chargeNote,
+      balance: charge?.balance
+    });
+
+    res.json(charge);
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "sgc_charge_failed",
+      details: error.body || error.message
+    });
+  }
+});
+
 router.get("/leaderboards/summary", requireSession, (req, res) => {
   const verifiedMpKills = countVerifiedPvpKills(
     store.listRewardEvents(),

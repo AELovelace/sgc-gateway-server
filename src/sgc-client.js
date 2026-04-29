@@ -119,6 +119,18 @@ export class SgcClient {
     });
   }
 
+  charge({ externalId, amount, note, idempotencyKey }) {
+    return this.#request("/charge", {
+      method: "POST",
+      body: JSON.stringify({
+        external_id: externalId,
+        amount,
+        note,
+        idempotency_key: idempotencyKey
+      })
+    });
+  }
+
   mint({ externalId, amount, note, idempotencyKey }) {
     return this.#request("/mint", {
       method: "POST",
